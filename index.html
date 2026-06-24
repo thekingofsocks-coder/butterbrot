@@ -119,6 +119,16 @@
   #win h1{font-size:clamp(28px,9vw,44px);font-weight:600;background:linear-gradient(180deg,#fff,#ffd166);-webkit-background-clip:text;background-clip:text;color:transparent;}
   #win .sub{font-size:15px;opacity:.85;}
   .light-ring{position:absolute;inset:0;z-index:1;pointer-events:none;background:conic-gradient(from 0deg, transparent, rgba(255,120,200,.14), transparent, rgba(120,200,255,.14), transparent);animation:spin 6s linear infinite;}
+
+.chooser-list{display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow-y:auto;width:min(360px,92vw);padding:2px;}
+.combo-row{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.06);border-radius:14px;padding:8px 10px;cursor:pointer;box-shadow:inset 0 0 0 1.5px rgba(255,214,110,.35);}
+.combo-row:active{transform:scale(.985);}
+.combo-cards{display:flex;flex:1;min-width:0;overflow-x:auto;gap:3px;scrollbar-width:none;}
+.combo-cards::-webkit-scrollbar{display:none;}
+.combo-go{font-size:13px;font-weight:800;color:#ffd66e;white-space:nowrap;}
+#chooserTitle,#recapTitle{margin:0 0 4px;font-size:17px;}
+#recapCards{display:flex;gap:3px;flex-wrap:wrap;justify-content:center;max-width:92vw;margin:4px 0;}
+#recapText{margin:2px 0 4px;opacity:.85;font-size:14px;text-align:center;}
 </style>
 </head>
 <body>
@@ -154,6 +164,17 @@
     </div>
     <div id="flash"><div id="flashBig"></div></div>
     <div id="wishOverlay" class="overlay hidden"><h3 id="wishTitle">Welcher Belag?</h3><div class="wish-grid" id="wishGrid"></div></div>
+    <div id="chooserOverlay" class="overlay hidden">
+      <h3 id="chooserTitle">Auswahl</h3>
+      <div class="chooser-list" id="chooserList"></div>
+      <button class="btn ghost" id="chooserCancel">Abbrechen</button>
+    </div>
+    <div id="recapOverlay" class="overlay hidden">
+      <h3 id="recapTitle">Letzter Zug</h3>
+      <div id="recapCards"></div>
+      <p id="recapText"></p>
+      <button class="btn" id="recapBtn">Los geht's</button>
+    </div>
     <div id="askOverlay" class="overlay hidden">
       <p id="askText"></p>
       <div style="display:flex;gap:12px;"><button class="btn" id="askYes">Ja</button><button class="btn ghost" id="askNo">Nein</button></div>
@@ -235,7 +256,7 @@ function newGame(mode){
   for(let i=0;i<7;i++){players[0].hand.push(deck.pop());players[1].hand.push(deck.pop());}
   let first;while(true){first=deck.pop();if(["6","7","8","B"].includes(first.rank)&&deck.length>10)deck.unshift(first);else break;}
   G={mode,deck,discard:[first],players,cur:0,activeSuit:first.suit,wish:null,pending:0,chain:null,streetPenalty:0,
-     mustCover:false,drewThisTurn:false,turnComplete:false,butterArmed:false,brotArmed:false,buildMode:null,buildSel:[],over:false};
+     mustCover:false,drewThisTurn:false,turnComplete:false,butterArmed:false,brotArmed:false,curPlayed:[],curDrew:0,curNote:"",lastMove:null,over:false};
   lastTopId=null;showScreen(null);
   if(mode==="2p"){startHandoff();}else{$("board").style.display="flex";renderAll();banner("Du beginnst. Leg los! 🍞");}
 }
@@ -262,7 +283,7 @@ function canPlay(card){
 const hasAnyPlay=p=>p.hand.some(canPlay);
 function startLegal(card){if(G.pending>0||G.streetPenalty>0)return false;if(card.rank==="B")return true;return card.suit===effectiveSuit()||card.rank===topCard().rank;}
 function streetCheck(seq){
-  if(seq.length<5)return{ok:false,msg:"Mindestens 5 Karten für eine Strasse."};
+  if(seq.length<4)return{ok:false,msg:"Mindestens 4 Karten für eine Strasse."};
   if(seq.filter(c=>c.rank==="B").length>1)return{ok:false,msg:"Maximal 1 Bube pro Strasse."};
   const nb=seq.filter(c=>c.rank!=="B");if(!nb.length)return{ok:false,msg:"Ungültig."};
   const suit=nb[0].suit;if(nb.some(c=>c.suit!==suit))return{ok:false,msg:"Alle Karten müssen gleichen Belag haben."};
@@ -290,6 +311,17 @@ function findBomb(player){
 }
 const hasBomb=p=>!!findBomb(p);
 const bombDrawOf=r=>2+(r==="6"?1:r==="7"?2:0);
+function orderBomb(cards,player){const ids=new Set(cards.map(c=>c.id));const sc={};player.hand.forEach(c=>{if(!ids.has(c.id))sc[c.suit]=(sc[c.suit]||0)+1;});return cards.slice().sort((a,b)=>(sc[a.suit]||0)-(sc[b.suit]||0));}
+function findBombs(player){const bube=player.hand.find(c=>c.rank==="B");const byRank={};player.hand.forEach(c=>{if(c.rank!=="B")(byRank[c.rank]=byRank[c.rank]||[]).push(c);});const out=[];for(const r in byRank){if(byRank[r].length>=4)out.push(orderBomb(byRank[r].slice(0,4),player));else if(byRank[r].length===3&&bube)out.push(orderBomb(byRank[r].slice(0,3).concat([bube]),player));}return out;}
+function findStreets(player){if(owedState()!=="normal"||G.mustCover)return [];const bubeAvail=player.hand.some(c=>c.rank==="B");const bube=player.hand.find(c=>c.rank==="B");const cand=[];for(const suit of SUIT_KEYS){const map={};player.hand.filter(c=>c.suit===suit&&c.rank!=="B").forEach(c=>{map[RANK_ORDER.indexOf(c.rank)]=c;});const real=p=>map[((p%9)+9)%9];for(let len=9;len>=4;len--){for(let s=0;s<9;s++){const cards=[];let gaps=0,gapAtEnd=false;for(let k=0;k<len;k++){const pos=((s+k)%9+9)%9;const rc=real(pos);if(rc){cards.push(rc);}else{gaps++;cards.push(null);if(k===0||k===len-1)gapAtEnd=true;}}if(gaps>1)continue;if(gaps===1&&(!bubeAvail||gapAtEnd))continue;if(!cards[0]||!cards[len-1])continue;const seq=cards.map(c=>c||bube);const asc=seq,desc=seq.slice().reverse();if(startLegal(asc[0]))cand.push(asc);if(startLegal(desc[0]))cand.push(desc);}}}return dedupeStreets(cand);}
+function dedupeStreets(cand){const byKey={};for(const seq of cand){const ids=seq.map(c=>c.id).slice().sort().join(",");(byKey[ids]=byKey[ids]||[]).push(seq);}let sets=Object.entries(byKey).map(([ids,seqs])=>({ids:ids.split(","),seqs}));sets=sets.filter(a=>!sets.some(b=>b!==a&&b.ids.length>a.ids.length&&a.ids.every(id=>b.ids.includes(id))));const out=[];const seen=new Set();for(const set of sets){for(const seq of set.seqs){const k=seq.map(c=>c.id).join(">");if(seen.has(k))continue;seen.add(k);out.push(seq);}}return out.slice(0,6);}
+function miniCard(card,w,h){const wrap=document.createElement("div");wrap.style.cssText="width:"+w+"px;height:"+h+"px;flex:0 0 auto;overflow:hidden;";const el=cardEl(card,true);el.style.transformOrigin="top left";el.style.transform="scale("+(w/84)+")";wrap.appendChild(el);return wrap;}
+function openComboChooser(combos,type){const ov=$("chooserOverlay");ov.classList.remove("hidden");$("chooserTitle").textContent=type==="street"?"Welche Strasse spielen?":"Welche Bombe zünden?";const list=$("chooserList");list.innerHTML="";const me=G.players[G.cur];combos.forEach(combo=>{const row=document.createElement("div");row.className="combo-row";const cc=document.createElement("div");cc.className="combo-cards";combo.forEach(c=>cc.appendChild(miniCard(c,44,63)));const go=document.createElement("div");go.className="combo-go";const rem=me.hand.length-combo.length;go.textContent=rem===0?"🍞 Brot!":rem===1?"🧈 Butter!":"Spielen ▶";row.append(cc,go);row.addEventListener("click",()=>playCombo(combo,type));list.appendChild(row);});}
+function closeChooser(){$("chooserOverlay").classList.add("hidden");}
+function playCombo(combo,type){closeChooser();const me=G.players[G.cur];const rem=me.hand.length-combo.length;if(rem===1)G.butterArmed=true;else if(rem===0)G.brotArmed=true;if(type==="street")playStreet(combo,me,false);else playBomb(combo,me,false);}
+function recordTurnEnd(){if(!G)return;G.lastMove={name:G.players[G.cur].name,cards:(G.curPlayed||[]).slice(),drew:G.curDrew||0,note:G.curNote||""};}
+function showRecap(cb){const m=G.lastMove;if(!m||(m.cards.length===0&&m.drew===0)){cb();return;}$("recapTitle").textContent="Letzter Zug: "+m.name;const cont=$("recapCards");cont.innerHTML="";m.cards.slice(0,12).forEach(c=>cont.appendChild(miniCard(c,50,72)));let parts=[];if(m.note)parts.push(m.note);if(m.cards.length)parts.push(m.cards.length+" Karte"+(m.cards.length>1?"n":"")+" gelegt");if(m.drew)parts.push(m.drew+" gezogen");if(!m.cards.length&&!m.drew)parts.push("gepasst");$("recapText").textContent=parts.join(" · ")+".";const ov=$("recapOverlay");ov.classList.remove("hidden");$("recapBtn").onclick=()=>{ov.classList.add("hidden");cb();};}
+
 function canTrick(me){
   if(owedState()!=='normal'||G.mustCover)return false;
   if(!me.hand.some(c=>c.rank==="B"))return false;
@@ -354,14 +386,14 @@ function renderActions(){
   }
   if(me.hand.length===2&&!G.butterArmed)bar.appendChild(mkBtn("🧈 Butter!",armButter,"bb-btn butter"));
   if(me.hand.length===1&&!G.brotArmed)bar.appendChild(mkBtn("🍞 Brot!",armBrot,"bb-btn brot"));
-  if(hasBomb(me))bar.appendChild(mkBtn("💣 Bombe",enterBomb,"ghost"));
+  const _bm=findBombs(me);if(_bm.length)bar.appendChild(mkBtn("💣 Bombe",()=>openComboChooser(_bm,"bomb"),"ghost"));
   const st=owedState();
   if(st==='bombchain'||st==='chain'){bar.appendChild(mkBtn(`Ziehen (${G.pending})`,humanTakePending));}
   else if(st==='buried'){bar.appendChild(mkBtn(`Vergraben ziehen (${G.streetPenalty})`,humanTakeBuried));}
   else{
     if(canTrick(me))bar.appendChild(mkBtn("🎩 Trick",startTrick,"purple"));
     if(!G.drewThisTurn)bar.appendChild(mkBtn("Karte ziehen",humanDraw));
-    if(me.hand.length>=5)bar.appendChild(mkBtn("🛣️ Strasse",enterStreet,"ghost"));
+    const _stt=findStreets(me);if(_stt.length)bar.appendChild(mkBtn("🛣️ Strasse",()=>openComboChooser(_stt,"street"),"ghost"));
     if(G.drewThisTurn)bar.appendChild(mkBtn(hasAnyPlay(me)?"Passen ➡":"Fertig ➡",completeTurn,"ghost"));
   }
 }
@@ -385,16 +417,16 @@ function toggleBuildCard(idx){const card=G.players[G.cur].hand[idx];const i=G.bu
 
 /* ---------- Ziehen ---------- */
 function drawCards(p,n){for(let i=0;i<n;i++){if(G.deck.length===0){if(G.discard.length<=1)break;const t=G.discard.pop();G.deck=shuffle(G.discard);G.discard=[t];}p.hand.push(G.deck.pop());}}
-function humanDraw(){sfxDraw();drawCards(G.players[G.cur],1);G.drewThisTurn=true;banner("Du hast eine Karte gezogen.");renderAll();}
-function humanTakePending(){sfxDraw();const me=G.players[G.cur];const n=G.pending;drawCards(me,n);banner(`Du ziehst ${n}. 😬`);G.pending=0;G.chain=null;completeTurn();}
-function humanTakeBuried(){sfxDraw();const me=G.players[G.cur];const n=G.streetPenalty;drawCards(me,n);G.streetPenalty=0;banner(`Vergraben gezogen: ${n}. Jetzt normal dran.`);renderAll();}
+function humanDraw(){sfxDraw();G.curDrew=(G.curDrew||0)+1;drawCards(G.players[G.cur],1);G.drewThisTurn=true;banner("Du hast eine Karte gezogen.");renderAll();}
+function humanTakePending(){sfxDraw();const me=G.players[G.cur];const n=G.pending;G.curDrew=(G.curDrew||0)+n;drawCards(me,n);G.pending=0;G.chain=null;G.drewThisTurn=true;banner(`Du ziehst ${n} – jetzt normal weiterspielen.`);renderAll();}
+function humanTakeBuried(){sfxDraw();const me=G.players[G.cur];const n=G.streetPenalty;G.curDrew=(G.curDrew||0)+n;drawCards(me,n);G.streetPenalty=0;banner(`Vergraben gezogen: ${n}. Jetzt normal dran.`);renderAll();}
 
 /* ---------- Einzelkarte ---------- */
 function humanPlay(idx){
   const me=G.players[G.cur];const card=me.hand[idx];if(!canPlay(card))return;
   if(me.hand.length===2&&!G.butterArmed){banner('Tippe zuerst 🧈 Butter!');return;}
   if(me.hand.length===1&&!G.brotArmed){banner('Tippe zuerst 🍞 Brot!');return;}
-  me.hand.splice(idx,1);G.discard.push(card);G.wish=null;sfxPlay();applyEffect(card,me,false);
+  me.hand.splice(idx,1);G.discard.push(card);G.wish=null;G.curPlayed.push({suit:card.suit,rank:card.rank});sfxPlay();applyEffect(card,me,false);
 }
 function applyEffect(card,player,isPC){
   G.activeSuit=card.rank==="B"?G.activeSuit:card.suit;
@@ -405,7 +437,7 @@ function applyEffect(card,player,isPC){
     return;
   }
   if(card.rank==="6"){G.pending+=1;G.chain="6";}else if(card.rank==="7"){G.pending+=2;G.chain="7";}
-  if(card.rank==="A"&&G.pending===0&&G.discard.length>=2&&!isPC){openAce(G.discard.length-2,()=>finishOrCover(card,player,false));return;}
+  if(card.rank==="A"&&G.pending===0&&G.discard.length>=2&&!isPC){const u=G.discard[G.discard.length-2];if(u.rank!=="A"&&u.suit===card.suit){openAce(G.discard.length-2,()=>finishOrCover(card,player,false));return;}}
   finishOrCover(card,player,isPC);
 }
 function finishOrCover(card,player,isPC){
@@ -434,13 +466,13 @@ function playStreet(seq,player,isPC){
   G.streetPenalty=buried;G.wish=null;G.pending=0;G.chain=null;
   const end=seq[seq.length-1];G.activeSuit=end.rank==="B"?G.activeSuit:end.suit;
   if(end.rank==="6"){G.pending=1;G.chain="6";}else if(end.rank==="7"){G.pending=2;G.chain="7";}
-  flashBig("🛣️ STRASSE!","#bfe9d2");
+  seq.forEach(c=>G.curPlayed.push({suit:c.suit,rank:c.rank}));G.curNote="Strasse 🛣️";flashBig("🛣️ STRASSE!","#bfe9d2");
   let msg=`${player.name} legt eine Strasse (${seq.length})!`;if(buried>0)msg+=` Vergraben: +${buried}.`;
   banner(msg);renderDiscard();renderCounts();renderHand();
   if(end.rank==="8"&&player.hand.length>0){G.mustCover=true;G.turnComplete=false;G.drewThisTurn=false;
     if(isPC){renderAll();setTimeout(pcStep,750);}else{banner(msg+" Endet auf 8 – decken!");renderAll();}return;}
   if(end.rank==="B"&&player.hand.length>0){if(isPC){chooseWishPC(player);endStreet(player,isPC);}else openWish("Strasse endet auf Bube – Belag?",()=>endStreet(player,false));return;}
-  if(end.rank==="A"&&player.hand.length>0&&G.discard.length>=2&&!isPC){openAce(G.discard.length-2,()=>endStreet(player,false));return;}
+  if(end.rank==="A"&&player.hand.length>0&&G.discard.length>=2&&!isPC){const u=G.discard[G.discard.length-2];if(u.rank!=="A"&&u.suit===end.suit){openAce(G.discard.length-2,()=>endStreet(player,false));return;}}
   endStreet(player,isPC);
 }
 function endStreet(player,isPC){resolveEnd(player,isPC);}
@@ -461,13 +493,13 @@ function playBomb(seq,player,isPC){
   let carried=0;if(G.streetPenalty>0)carried=0;else if(G.chain==="6"||G.chain==="7"||G.chain==="bomb")carried=G.pending;
   G.streetPenalty=0;G.pending=carried+bd;G.chain="bomb";G.wish=null;
   const top=seq[seq.length-1];
-  flashBig("💥 BOMBE!","#ff9b8a");shake();sfxBomb();
+  seq.forEach(c=>G.curPlayed.push({suit:c.suit,rank:c.rank}));G.curNote="Bombe 💥";flashBig("💥 BOMBE!","#ff9b8a");shake();sfxBomb();
   banner(`${player.name} zündet eine ${rank==="B"?"":rank+"er-"}Bombe! Nächster: +${G.pending}.`);
   renderDiscard();renderCounts();renderHand();
   const after=()=>{
     if(rank==="8"&&player.hand.length>0){G.mustCover=true;G.turnComplete=false;G.drewThisTurn=false;
       if(isPC){renderAll();setTimeout(pcStep,750);}else{banner("8er-Bombe – decken (nochmal dran)!");renderAll();}return;}
-    if(rank==="A"&&player.hand.length>0&&G.discard.length>=5&&!isPC){openAce(G.discard.length-5,()=>resolveEnd(player,false));return;}
+    if(rank==="A"&&player.hand.length>0&&G.discard.length>=5&&!isPC){const u=G.discard[G.discard.length-5];if(u.rank!=="A"){openAce(G.discard.length-5,()=>resolveEnd(player,false));return;}}
     resolveEnd(player,isPC);
   };
   if(top.rank==="B"){if(isPC){chooseWishPC(player);after();}else openWish("Bombe endet auf Bube – Belag?",()=>after());}
@@ -502,7 +534,7 @@ function doTrick(player,aceSuit,isPC){
   G.discard.splice(G.discard.length-2,1); // Bube dank Ass wieder aufnehmen
   player.hand.push(bube);
   G.activeSuit=ace.suit;G.wish=null;G.pending=0;G.chain=null;G.mustCover=false;G.streetPenalty=0;
-  flashBig("🎩 TRICK!","#d9b3ff");sfxTrick();
+  G.curPlayed.push({suit:eight.suit,rank:eight.rank});G.curPlayed.push({suit:ace.suit,rank:ace.rank});G.curNote="Trick 🎩";flashBig("🎩 TRICK!","#d9b3ff");sfxTrick();
   const su=SUITS[aceSuit];
   banner(`🎩 ${player.name} wechselt zu ${su.e} ${su.name} und behält den Buben!`);
   renderDiscard();renderCounts();renderHand();
@@ -528,11 +560,11 @@ function openAce(underIdx,cb){
 
 /* ---------- Zugwechsel ---------- */
 function completeTurn(){G.turnComplete=true;G.mustCover=false;if(G.mode==="pc")passTurnImmediate();else renderAll();}
-function passTurn(){G.cur=1-G.cur;resetTurnFlags();startHandoff();}
-function passTurnImmediate(){G.cur=1-G.cur;resetTurnFlags();const me=G.players[G.cur];renderAll();startBanner();if(me.isPC)setTimeout(pcStep,850);}
-function resetTurnFlags(){G.drewThisTurn=false;G.turnComplete=false;G.butterArmed=false;G.brotArmed=false;G.mustCover=false;G.buildMode=null;G.buildSel=[];}
+function passTurn(){recordTurnEnd();G.cur=1-G.cur;resetTurnFlags();startHandoff();}
+function passTurnImmediate(){recordTurnEnd();G.cur=1-G.cur;resetTurnFlags();const me=G.players[G.cur];renderAll();startBanner();if(me.isPC)setTimeout(pcStep,850);}
+function resetTurnFlags(){G.drewThisTurn=false;G.turnComplete=false;G.butterArmed=false;G.brotArmed=false;G.mustCover=false;G.curPlayed=[];G.curDrew=0;G.curNote="";}
 function startHandoff(){$("board").style.display="none";$("handoffName").textContent=G.players[G.cur].name;showScreen("handoff");}
-$("revealBtn").onclick=()=>{$("handoff").classList.add("hidden");renderAll();$("board").style.display="flex";startBanner();};
+$("revealBtn").onclick=()=>{$("handoff").classList.add("hidden");renderAll();$("board").style.display="flex";showRecap(()=>startBanner());};
 
 /* ---------- Sieg / Interrupt ---------- */
 function resolveEnd(player,isPC){if(player.hand.length===0){attemptWin(player);return;}if(isPC)passTurnImmediate();else completeTurn();}
@@ -566,30 +598,30 @@ function pcStep(){
   if(G.over)return;const pc=G.players[G.cur];const st=owedState();
   if(st==='bombchain'){
     if(findBomb(pc)){playBomb(findBomb(pc),pc,true);return;}
-    sfxDraw();drawCards(pc,G.pending);banner(`Computer zieht ${G.pending}.`);G.pending=0;G.chain=null;renderCounts();setTimeout(passTurnImmediate,650);return;
+    sfxDraw();G.curDrew=(G.curDrew||0)+G.pending;drawCards(pc,G.pending);banner(`Computer zieht ${G.pending}.`);G.pending=0;G.chain=null;G.drewThisTurn=true;renderCounts();setTimeout(pcStep,650);return;
   }
   if(st==='buried'){
     if(G.streetPenalty>=3&&findBomb(pc)){playBomb(findBomb(pc),pc,true);return;}
-    sfxDraw();const n=G.streetPenalty;drawCards(pc,n);G.streetPenalty=0;renderCounts();banner(`Computer zieht ${n} (vergraben).`);setTimeout(pcStep,650);return;
+    sfxDraw();const n=G.streetPenalty;G.curDrew=(G.curDrew||0)+n;drawCards(pc,n);G.streetPenalty=0;renderCounts();banner(`Computer zieht ${n} (vergraben).`);setTimeout(pcStep,650);return;
   }
   if(st==='chain'){
     const ctr=pc.hand.find(canPlay);if(ctr){pcPlay(pc,ctr);return;}
     if(findBomb(pc)&&G.pending>=4){playBomb(findBomb(pc),pc,true);return;}
-    sfxDraw();drawCards(pc,G.pending);banner(`Computer zieht ${G.pending}.`);G.pending=0;G.chain=null;renderCounts();setTimeout(passTurnImmediate,650);return;
+    sfxDraw();G.curDrew=(G.curDrew||0)+G.pending;drawCards(pc,G.pending);banner(`Computer zieht ${G.pending}.`);G.pending=0;G.chain=null;G.drewThisTurn=true;renderCounts();setTimeout(pcStep,650);return;
   }
   if(!G.mustCover&&findBomb(pc)&&G.players[1-G.cur].hand.length<=2){playBomb(findBomb(pc),pc,true);return;}
   const ts=pcTrickSuit(pc);if(ts){doTrick(pc,ts,true);return;}
   const street=pcFindStreet(pc);if(street){setTimeout(()=>playStreet(street,pc,true),450);return;}
   let opt=pc.hand.filter(canPlay);
   if(opt.length===0){
-    if(!G.drewThisTurn){sfxDraw();drawCards(pc,1);G.drewThisTurn=true;renderCounts();banner("Computer zieht eine Karte.");setTimeout(pcStep,650);return;}
+    if(!G.drewThisTurn){sfxDraw();G.curDrew=(G.curDrew||0)+1;drawCards(pc,1);G.drewThisTurn=true;renderCounts();banner("Computer zieht eine Karte.");setTimeout(pcStep,650);return;}
     banner("Computer passt.");setTimeout(passTurnImmediate,500);return;
   }
   const score=c=>({"8":5,"7":4,"6":4,"B":1,"A":2}[c.rank]??3);opt.sort((a,b)=>score(b)-score(a));
   if(opt.length>1&&opt[0].rank==="B")opt.push(opt.shift());
   pcPlay(pc,opt[0]);
 }
-function pcPlay(pc,card){const idx=pc.hand.indexOf(card);pc.hand.splice(idx,1);G.discard.push(card);G.wish=null;sfxPlay();renderDiscard();renderCounts();setTimeout(()=>applyEffect(card,pc,true),420);}
+function pcPlay(pc,card){const idx=pc.hand.indexOf(card);pc.hand.splice(idx,1);G.discard.push(card);G.wish=null;G.curPlayed.push({suit:card.suit,rank:card.rank});sfxPlay();renderDiscard();renderCounts();setTimeout(()=>applyEffect(card,pc,true),420);}
 function pcTrickSuit(pc){
   if(!canTrick(pc))return null;const suits=trickAceSuits(pc);const cnt={};pc.hand.forEach(c=>cnt[c.suit]=(cnt[c.suit]||0)+1);
   let best=null,bv=2;for(const s of suits){if(s!==effectiveSuit()&&(cnt[s]||0)>bv){bv=cnt[s];best=s;}}
@@ -603,8 +635,8 @@ function pcFindStreet(pc){
     for(let s=0;s<9;s++)for(const d of[1,-1]){
       const seq=[];let usedBube=false;
       for(let len=0;len<9;len++){const pos=((s+d*len)%9+9)%9;if(map[pos])seq.push(map[pos]);else if(!usedBube&&bubes.length){usedBube=true;seq.push(bubes[0]);}else break;}
-      while(seq.length&&seq[seq.length-1].rank==="B"&&seq.length>5)seq.pop();
-      if(seq.length>=5){if(startLegal(seq[0]))return seq;const rev=seq.slice().reverse();if(startLegal(rev[0]))return rev;}
+      while(seq.length&&seq[seq.length-1].rank==="B"&&seq.length>4)seq.pop();
+      if(seq.length>=4){if(startLegal(seq[0]))return seq;const rev=seq.slice().reverse();if(startLegal(rev[0]))return rev;}
     }
   }
   return null;
@@ -615,8 +647,9 @@ function showScreen(id){["home","handoff","win"].forEach(s=>$(s).classList.add("
 document.querySelectorAll(".mode-btn").forEach(b=>b.addEventListener("click",()=>newGame(b.dataset.mode)));
 $("quitBtn").onclick=()=>{if(confirm("Spiel verlassen und zum Menü?")){G=null;stopConfetti();showScreen("home");$("board").style.display="none";}};
 $("soundBtn").onclick=()=>{soundOn=!soundOn;$("soundBtn").textContent=soundOn?"🔊":"🔇";if(soundOn)sfxBB();};
-$("deckPile").onclick=()=>{if(!G||G.over)return;const me=G.players[G.cur];if(me.isPC||G.turnComplete||G.buildMode)return;const st=owedState();if(st==='bombchain'||st==='chain')humanTakePending();else if(st==='buried')humanTakeBuried();else if(!G.drewThisTurn)humanDraw();};
-$("rulesLink").onclick=()=>alert(
+$("deckPile").onclick=()=>{if(!G||G.over)return;const me=G.players[G.cur];if(me.isPC||G.turnComplete)return;const st=owedState();if(st==='bombchain'||st==='chain')humanTakePending();else if(st==='buried')humanTakeBuried();else if(!G.drewThisTurn)humanDraw();};
+$("chooserCancel").onclick=closeChooser;
+  $("rulesLink").onclick=()=>alert(
  "BUTTERBROT – Kurzregeln\n\n• Ziel: Als Erster alle Karten loswerden.\n• Lege gleicher Belag ODER gleicher Wert.\n\n"+
  "Sonderkarten:\n  6 → +1   7 → +2   8 → nochmal (decken)\n  Bube → Wild + Belag wünschen\n  Ass → Karte darunter klauen\n\n"+
  "STRASSEN: 5+ gleicher Belag, fortlaufend, Bube füllt 1 Lücke. Endet auf 8 → decken.\n\n"+
